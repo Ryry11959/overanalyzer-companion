@@ -1,0 +1,3 @@
+# Reproducible PyInstaller outputs; the signed release is published by the owner.
+build/
+dist/

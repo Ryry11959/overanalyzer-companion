@@ -1,0 +1,70 @@
+# OverAnalyzer capture agent config. Copy to `agent.toml` and edit, then run:
+#   python -m overanalyzer_agent --config agent.toml
+# Env vars override the file: OA_AGENT_API_URL, OA_AGENT_WEB_URL, OA_AGENT_TOKEN.
+
+# --- Where to send screenshots ---
+# These default to the configured service at https://overanalyzer.app and are NOT editable in the app -
+# captures always go to the same place, so the Settings screen only asks for a
+# device key. Override them here (or with OA_AGENT_API_URL / OA_AGENT_WEB_URL)
+# if you're self-hosting or running the stack locally.
+# api_url = "https://api.overanalyzer.app"
+# web_url = "https://overanalyzer.app"
+# api_url = "http://localhost:8000"
+# web_url = "http://localhost:3000"
+
+# --- Who the captures belong to ---
+# A device key, minted from the web app's Settings -> Devices page (one live key
+# per account). You'd normally paste this into the app's Settings screen instead
+# of here - it has a "Pair a device" link that opens that page for you. Only
+# needed when the server runs with auth ON (the configured service requires a device key).
+bearer_token = ""
+# NOTE: there is no gamertag setting any more. Your in-game name lives on your
+# ACCOUNT - you set it during onboarding in the web app, and the server uses that.
+# `self_gamertag` is still read as a legacy fallback for old installs, but the app
+# never asks for it and never writes it back.
+
+timeout_sec = 30.0
+
+# Which monitor to capture from, for a multi-monitor setup where the game runs on
+# a secondary display. Unset (default) = the primary monitor. Index is 1-based
+# (the app's Settings -> Advanced -> Monitor dropdown lists what's detected).
+# monitor_index = 2
+
+# --- Capture geometry ---
+# Leave these alone unless a capture comes out misaligned. Geometry is derived from
+# your screen size at capture time (Overwatch scales its menus to fit the display and
+# centres them), so 1080p, 1440p, 4K and ultrawide all work without tuning.
+# Uncomment to pin an explicit crop instead: [left, top, right, bottom].
+# summary_region = [1300, 180, 1600, 800]   # 300x620 strip on 1920x1080
+
+# Leaderboard capture:
+#   "anchor" (default) finds each team's bar by color - tolerant of vertical shifts.
+#   "region" crops fixed rectangles instead (set team1_region/team2_region below).
+leaderboard_mode = "anchor"
+# leaderboard_width = 850                   # derived from the frame when unset
+
+# Overwatch team-bar colors (own team = blue, enemy = red), matched EXACTLY by default.
+# (1,184,246) is the top/highlighted-row blue shade; without it the first row clips.
+blue_colors = [[1, 186, 249], [1, 184, 247], [1, 184, 246]]
+red_colors = [[232, 45, 80]]
+
+# Both settings below are OFF by default and should stay that way unless capture is
+# already failing for you. The anchor box spans every matched pixel, so a looser match
+# can stretch the crop past the leaderboard and misalign the row grid - which garbles
+# every stat instead of failing cleanly. Check a debug_capture run after changing them.
+color_tolerance = 0        # per-channel slack; 0 = exact
+auto_team_colors = false   # sample bar colors off the frame if the configured ones miss
+
+# Only used when leaderboard_mode = "region":
+# team1_region = [LEFT, TOP, RIGHT, BOTTOM]
+# team2_region = [LEFT, TOP, RIGHT, BOTTOM]
+
+# --- Hotkeys (see the `keyboard` library for key names) ---
+hotkey_summary = "f11"       # on the summary screen
+hotkey_scoreboard = "f12"    # on the scoreboard (Tab) screen -> captures both teams + uploads
+# In the app and the tray this key PAUSES/resumes capture (the panel labels it
+# "Pause capture"). Discarding a half-made capture is the "Discard" link that
+# appears while a summary is held, and "Reset buffer" in the tray menu. The key
+# name is unchanged so existing configs keep working; the headless --cli driver
+# still uses it to reset.
+hotkey_reset = "f9"
