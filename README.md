@@ -131,6 +131,14 @@ runs - the pipeline is what is being tested.
 
 ## Updating
 
+**A Microsoft Store install updates through the Store**, and everything in this
+section applies to the direct download only. The app works out which it is at
+runtime from its MSIX package identity (`packaging.py`), so the Store build
+never offers its own update - it cannot install one, because its program
+directory is read-only and replacing its payload would break the package
+signature. `--version` prints `(store)` or `(direct)` so a support conversation
+does not have to guess.
+
 The app asks the service what the newest build is when it starts
 (`GET /api/client/release`). If there is one, a banner appears at the top of the
 panel: **Update 0.2.0 available**, with an **Update now** button. Clicking it
@@ -298,7 +306,35 @@ Release containing those files. The draft remains private to repository maintain
 until the exact candidate passes the Windows and Game Report checks below. Publishing
 the tested draft is a separate owner action and must not rebuild or replace its bytes.
 
-### The release is unsigned - on purpose
+## Microsoft Store build
+
+The same executable also ships as an MSIX package for the Microsoft Store, which
+is signed by Microsoft during certification - so that copy has **no SmartScreen
+warning** and no certificate to buy. It is not a second app: `build_msix.py`
+wraps the EXE `build.py` produces, and the only behavioural difference is that
+the Store build leaves updating to the Store.
+
+```
+.venv\Scripts\python.exe build_msix.py        # needs the Windows SDK for makeappx
+```
+
+The manifest and every tile are generated - the tiles from `ui/brand.py`, the
+same source as the EXE icon, so they cannot drift; the version from
+`overanalyzer_agent.__version__`, so it cannot disagree with the EXE metadata.
+Package identity comes from Partner Center via `msix/identity.json` or
+`OA_MSIX_*` environment variables, and the build refuses to run with
+placeholders rather than producing a package that fails at upload.
+
+`store/SUBMISSION.md` is the end-to-end submission process; the rest of `store/`
+is the content each step asks for (listing copy, privacy policy, reviewer notes,
+age-rating answers, screenshot spec).
+
+One limitation worth knowing: a Store-installed app cannot be launched
+elevated, so the run-as-administrator workaround for hotkeys in **exclusive
+fullscreen** (see Caveats) is only available on the direct download. That is
+the main reason both channels still exist.
+
+### The direct release is unsigned - on purpose
 
 `OverAnalyzer.exe` carries **no Authenticode signature**, so Windows SmartScreen
 shows *"Windows protected your PC"* on first run and the user has to choose

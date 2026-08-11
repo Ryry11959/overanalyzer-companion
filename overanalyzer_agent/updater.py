@@ -42,6 +42,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from overanalyzer_agent import packaging
+
 RELEASE_PATH = "/api/client/release"
 
 # Hosts a release may be downloaded from. GitHub serves release assets from
@@ -111,6 +113,11 @@ def check_for_update(
     Never raises: a failed check is not something to interrupt a capture
     session over, and the app simply stays on the version it has.
     """
+    # A Store install is updated by the Store. Returning None here is what keeps
+    # the update banner off that build entirely - offering an update the app is
+    # not allowed to perform would be worse than saying nothing.
+    if packaging.is_store_build():
+        return None
     if request_get is None:
         import requests
 
@@ -340,6 +347,13 @@ def install_release(
     The caller quits the app immediately afterwards: the helper is waiting for
     this process to exit before it can replace the file.
     """
+    # Belt and braces: check_for_update already declines to offer one on a Store
+    # build, so reaching here means a caller went around it. The install
+    # directory of a packaged app is read-only to the app and replacing its
+    # payload would break the package signature, so refuse rather than fail
+    # halfway through a swap.
+    if packaging.is_store_build():
+        raise UpdateError(packaging.STORE_UPDATE_MESSAGE)
     target = executable if executable is not None else current_executable()
     if target is None:
         raise UpdateError(

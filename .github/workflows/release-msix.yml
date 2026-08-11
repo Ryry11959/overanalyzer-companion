@@ -1,0 +1,91 @@
+name: Build Microsoft Store package
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["store-v*"]
+
+# The Store package is signed by Microsoft during certification, not here, so
+# this workflow holds no signing key and needs no secrets. It keeps the same
+# posture as release-agent.yml: every action pinned to a commit SHA, and no
+# token available to the build job.
+#
+# Package identity is not secret - it is embedded in every shipped copy - so it
+# comes from repository *variables* rather than secrets. Set these once under
+# Settings -> Secrets and variables -> Actions -> Variables, copying them from
+# Partner Center (Product -> Product identity):
+#   OA_MSIX_IDENTITY_NAME          e.g. 12345Publisher.OverAnalyzer
+#   OA_MSIX_PUBLISHER              e.g. CN=A1B2C3D4-1111-2222-3333-444455556666
+#   OA_MSIX_PUBLISHER_DISPLAY_NAME e.g. OverAnalyzer
+permissions: {}
+
+concurrency:
+  group: release-msix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Store package (x64)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13.4"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+      - name: Install companion and packaging dependencies
+        run: python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Fail early when package identity is not configured
+        shell: pwsh
+        env:
+          OA_MSIX_IDENTITY_NAME: ${{ vars.OA_MSIX_IDENTITY_NAME }}
+          OA_MSIX_PUBLISHER: ${{ vars.OA_MSIX_PUBLISHER }}
+          OA_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.OA_MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          # Building with a wrong identity wastes a full build and is only
+          # discovered at upload, so check it before PyInstaller runs.
+          python -c "import build_msix; build_msix.load_identity(); print('Package identity resolved.')"
+
+      - name: Build the Store package
+        env:
+          OA_MSIX_IDENTITY_NAME: ${{ vars.OA_MSIX_IDENTITY_NAME }}
+          OA_MSIX_PUBLISHER: ${{ vars.OA_MSIX_PUBLISHER }}
+          OA_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.OA_MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: python build_msix.py
+
+      - name: Read package version
+        id: version
+        shell: pwsh
+        run: '"version=$(python build.py --version)" >> $env:GITHUB_OUTPUT'
+
+      - name: Verify release tag matches packaged version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $expectedTag = "store-v$env:PACKAGE_VERSION"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Release tag '$env:GITHUB_REF_NAME' does not match packaged version '$expectedTag'."
+          }
+
+      - name: Summarise the package
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/OverAnalyzer.msix -Algorithm SHA256).Hash.ToLowerInvariant()
+          "Package SHA-256: ``$hash``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "Upload ``OverAnalyzer.msix`` in Partner Center. Do not sign it - Microsoft signs it during certification." | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload the Store package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OverAnalyzer-${{ steps.version.outputs.version }}-msix
+          path: dist/OverAnalyzer.msix
+          if-no-files-found: error
+          retention-days: 14

@@ -4,7 +4,13 @@ from overanalyzer_agent.app import missing_bundled_assets, version_message
 
 
 def test_package_version_is_the_cli_version_source():
-    assert version_message() == f"overanalyzer-agent {__version__}"
+    assert version_message().startswith(f"overanalyzer-agent {__version__}")
+
+
+def test_the_version_line_names_the_install_channel():
+    """Store and direct builds differ in whether the app updates itself, so
+    support needs to see which one a user is running without asking."""
+    assert version_message().endswith(" (direct)")  # a test run is never packaged
 
 
 def test_source_tree_contains_every_asset_required_by_the_frozen_app():

@@ -17,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from overanalyzer_agent import __version__
+from overanalyzer_agent import __version__, packaging
 from overanalyzer_agent.config import AgentConfig, load_config
 from overanalyzer_agent.controller import CaptureController, StatusEvent
 
@@ -32,8 +32,13 @@ def _print_listener(event: StatusEvent) -> None:
 
 
 def version_message() -> str:
-    """The version string used by both source and frozen command-line checks."""
-    return f"overanalyzer-agent {__version__}"
+    """The version string used by both source and frozen command-line checks.
+
+    It names the install channel because the two behave differently in one
+    visible way - the Store build does not update itself - and a support
+    conversation should not have to guess which one a user has.
+    """
+    return f"overanalyzer-agent {__version__} ({packaging.channel()})"
 
 
 def initial_screen(cfg: AgentConfig) -> str:

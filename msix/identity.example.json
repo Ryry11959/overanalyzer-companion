@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Copy this file to msix/identity.json and replace every value with the one",
+    "Partner Center shows under Product -> Product identity, AFTER you have",
+    "reserved the app name. These three strings must match it character for",
+    "character or the upload is rejected with a package identity error.",
+    "",
+    "identity_name          = 'Package/Identity/Name'          e.g. 12345OverAnalyzer.OverAnalyzer",
+    "publisher              = 'Package/Identity/Publisher'     e.g. CN=A1B2C3D4-....",
+    "publisher_display_name = 'Package/Properties/PublisherDisplayName'",
+    "",
+    "None of these are secret - they are embedded in every copy of the shipped",
+    "package - so identity.json is safe to commit if you prefer that to setting",
+    "the OA_MSIX_* environment variables."
+  ],
+  "identity_name": "REPLACE.WITH.PartnerCenter.Identity.Name",
+  "publisher": "CN=REPLACE-WITH-PARTNER-CENTER-PUBLISHER-ID",
+  "publisher_display_name": "OverAnalyzer"
+}
