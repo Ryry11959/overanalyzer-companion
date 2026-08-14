@@ -16,17 +16,42 @@ by exclusive fullscreen - a Store-installed app cannot elevate that way.
 
 ## Step 0 - do this first, today
 
-**Open the Partner Center account and start identity verification**, at
-<https://partner.microsoft.com/dashboard>. Registration is now **free** for both
-Individual and Company accounts.
+**Open the Store developer account and start identity verification.**
 
-This is first because it is the only step on the critical path you do not
-control. Verification can clear the same day or take several days, and
-everything below can be done while you wait. Leaving it until the package is
-ready is the single most common reason a Store submission slips a week.
+> ### Use the right entry point
+>
+> Start at **<https://storedeveloper.microsoft.com>** → **Get started for free**
+> → **Individual developer**.
+>
+> Do **not** start at `partner.microsoft.com`. That is the general Partner
+> Center - the cloud/solutions partner program - and it enrols you as a
+> **company**, asking for business details this app does not have. It looks like
+> the right place and is not.
+>
+> ### Sign in with a *personal* Microsoft account
+>
+> The Individual tier requires a **personal Microsoft account (MSA)**. A
+> **work or school account (Microsoft Entra ID) cannot be an Individual
+> account** - sign in with one and Partner Center will only offer you Company,
+> with no visible explanation.
+>
+> If the browser silently reuses a work account, open the link in a private /
+> incognito window and sign in deliberately with the personal account you want
+> to own this app.
+>
+> ### This choice is permanent
+>
+> **Individual cannot be converted to Company later.** Switching means opening a
+> new account and re-publishing. Pick deliberately now: Individual unless you
+> have a registered legal business entity you want to publish under.
 
-Choose **Individual** unless you have a registered business - it verifies
-against you personally rather than against company documents, which is faster.
+Registration is **free** for both types. Individual verification is a
+government-issued photo ID plus a selfie, which is normally fast; Company
+verification checks business documents and is the slower path.
+
+This step is first because it is the only thing on the critical path you do not
+control. Everything below can be done while you wait, and leaving it until the
+package is ready is the most common reason a submission slips a week.
 
 ### Your name, and what the public sees
 
