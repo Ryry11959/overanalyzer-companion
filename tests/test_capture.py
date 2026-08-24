@@ -1,8 +1,8 @@
 import sys
 import types
+from io import BytesIO
 
-import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from overanalyzer_agent import capture
 from overanalyzer_agent.config import AgentConfig
@@ -10,66 +10,65 @@ from overanalyzer_agent.config import AgentConfig
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def test_to_png_bytes_is_png():
-    data = capture.to_png_bytes(Image.new("RGB", (8, 8), (255, 0, 0)))
-    assert data[:8] == PNG_MAGIC
+def _teams_frame(
+    top=(20, 155, 210), bottom=(180, 30, 70), size=(1000, 600)
+) -> Image.Image:
+    frame = Image.new("RGB", size, (10, 15, 35))
+    draw = ImageDraw.Draw(frame)
+    width, height = size
+    draw.rectangle((.25 * width, .18 * height, .75 * width, .58 * height), fill=top)
+    draw.rectangle((.25 * width, .60 * height, .75 * width, .98 * height), fill=bottom)
+    return frame
 
 
-def test_crop_region_size():
-    out = capture.crop_region(Image.new("RGB", (100, 100)), (10, 20, 40, 80))
-    assert out.size == (30, 60)
-
-
-def test_find_anchor_returns_box():
-    arr = np.zeros((120, 200, 3), dtype=np.uint8)
-    arr[10:90, 30:60] = (1, 186, 249)  # rows 10..89, cols 30..59
-    box = capture.find_leaderboard_anchor(Image.fromarray(arr), [(1, 186, 249)], 50)
-    assert box == (30, 10, 80, 89)
-
-
-def test_find_anchor_none_when_absent():
-    img = Image.new("RGB", (50, 50), (0, 0, 0))
-    assert capture.find_leaderboard_anchor(img, [(1, 186, 249)], 50) is None
-
-
-def test_capture_summary_uses_frame():
-    cfg = AgentConfig(summary_region=(0, 0, 10, 20))
-    data = capture.capture_summary(cfg, frame=Image.new("RGB", (50, 50), (9, 9, 9)))
-    assert data[:8] == PNG_MAGIC
-
-
-def test_capture_leaderboards_region_mode():
-    cfg = AgentConfig(
-        leaderboard_mode="region",
-        team1_region=(0, 0, 20, 10),
-        team2_region=(0, 10, 20, 20),
+def test_full_frame_capture_preserves_the_source_dimensions() -> None:
+    captured = capture.capture_full_frame(
+        AgentConfig(), frame=Image.new("RGB", (123, 77), (9, 8, 7))
     )
-    t1, t2 = capture.capture_leaderboards(cfg, frame=Image.new("RGB", (40, 40)))
-    assert t1[:8] == PNG_MAGIC and t2[:8] == PNG_MAGIC
+    assert captured.png[:8] == PNG_MAGIC
+    assert (captured.width, captured.height) == (123, 77)
+    assert Image.open(BytesIO(captured.png)).size == (123, 77)
 
 
-def test_capture_leaderboards_anchor_mode_both_sides():
-    arr = np.zeros((100, 200, 3), dtype=np.uint8)
-    arr[20:60, 10:40] = (1, 186, 249)  # blue (own team)
-    arr[20:60, 120:150] = (232, 45, 80)  # red (enemy)
-    cfg = AgentConfig(leaderboard_width=30)
-    t1, t2 = capture.capture_leaderboards(cfg, frame=Image.fromarray(arr))
-    assert t1 is not None and t2 is not None
+def test_game_report_guard_accepts_two_broad_team_areas() -> None:
+    assert capture.looks_like_game_report(_teams_frame())
 
 
-def test_capture_leaderboards_anchor_missing_side_is_none():
-    arr = np.zeros((100, 200, 3), dtype=np.uint8)
-    arr[20:60, 10:40] = (1, 186, 249)  # only blue present
-    cfg = AgentConfig(leaderboard_width=30)
-    t1, t2 = capture.capture_leaderboards(cfg, frame=Image.fromarray(arr))
-    assert t1 is not None and t2 is None
+def test_game_report_guard_does_not_depend_on_exact_team_colours() -> None:
+    assert capture.looks_like_game_report(
+        _teams_frame(top=(240, 160, 20), bottom=(150, 40, 220))
+    )
 
 
-# --- multi-monitor ----------------------------------------------------------
+def test_game_report_guard_rejects_a_plain_desktop() -> None:
+    assert not capture.looks_like_game_report(Image.new("RGB", (1920, 1080), (32, 34, 40)))
+
+
+def test_required_guard_refuses_before_encoding() -> None:
+    try:
+        capture.capture_full_frame(
+            AgentConfig(),
+            frame=Image.new("RGB", (1920, 1080), (32, 34, 40)),
+            require_game_report=True,
+        )
+    except capture.NotGameReportError:
+        pass
+    else:
+        raise AssertionError("a non-report frame was accepted")
+
+
+def test_the_client_has_no_crop_or_anchor_helpers() -> None:
+    retired = {
+        "crop_region", "find_leaderboard_anchor", "capture_summary",
+        "capture_leaderboards", "detect_team_colors", "resolve_summary_region",
+    }
+    assert not [name for name in retired if hasattr(capture, name)]
+
+
 class _FakeGrab:
-    def __init__(self, w, h):
-        self.size = (w, h)
-        self.bgra = bytes(w * h * 4)
+    def __init__(self, width, height):
+        self.size = (width, height)
+        self.bgra = bytes(width * height * 4)
 
 
 class _FakeSct:
@@ -82,14 +81,14 @@ class _FakeSct:
     def __enter__(self):
         return self
 
-    def __exit__(self, *_a):
+    def __exit__(self, *_args):
         return False
 
 
 _TWO_MONITORS = [
-    {"left": 0, "top": 0, "width": 3840, "height": 1080},  # 0: synthetic "all" bbox
-    {"left": 0, "top": 0, "width": 1920, "height": 1080},  # 1: primary
-    {"left": 1920, "top": 0, "width": 1600, "height": 900},  # 2: secondary
+    {"left": 0, "top": 0, "width": 3840, "height": 1080},
+    {"left": 0, "top": 0, "width": 1920, "height": 1080},
+    {"left": 1920, "top": 0, "width": 1600, "height": 900},
 ]
 
 
@@ -102,22 +101,19 @@ def _install_fake_mss(monkeypatch, monitors):
 def test_list_monitors_excludes_the_synthetic_all_bbox(monkeypatch):
     _install_fake_mss(monkeypatch, _TWO_MONITORS)
     monitors = capture.list_monitors()
-    assert [m["index"] for m in monitors] == [1, 2]
-    assert monitors[1] == {"index": 2, "width": 1600, "height": 900, "left": 1920, "top": 0}
+    assert [monitor["index"] for monitor in monitors] == [1, 2]
 
 
-def test_grab_screen_defaults_to_the_primary_monitor(monkeypatch):
+def test_grab_screen_defaults_to_primary(monkeypatch):
     _install_fake_mss(monkeypatch, _TWO_MONITORS)
     assert capture.grab_screen().size == (1920, 1080)
-    assert capture.grab_screen(None).size == (1920, 1080)
 
 
-def test_grab_screen_selects_the_given_monitor(monkeypatch):
+def test_grab_screen_selects_the_configured_monitor(monkeypatch):
     _install_fake_mss(monkeypatch, _TWO_MONITORS)
     assert capture.grab_screen(2).size == (1600, 900)
 
 
-def test_grab_screen_falls_back_to_primary_for_an_unplugged_monitor(monkeypatch):
-    """A saved index for a monitor that's no longer connected must not crash."""
+def test_grab_screen_falls_back_after_a_monitor_is_unplugged(monkeypatch):
     _install_fake_mss(monkeypatch, _TWO_MONITORS)
     assert capture.grab_screen(5).size == (1920, 1080)

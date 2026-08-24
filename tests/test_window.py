@@ -1,11 +1,10 @@
-"""The panel's pure helpers: config merging, region parsing, host display.
+"""The panel's pure helpers: config merging and host display.
 
 The Tk parts of ``window`` are imported lazily, so everything here runs headless.
 """
 from overanalyzer_agent.config import AgentConfig
 from overanalyzer_agent.window import (
-    DEFAULT_HOTKEYS, build_config, clamp_position, format_region, host_of, monitor_options,
-    parse_region, split_message,
+    DEFAULT_HOTKEYS, build_config, clamp_position, host_of, monitor_options, split_message,
 )
 
 
@@ -40,36 +39,17 @@ def test_blank_hotkeys_fall_back_to_defaults():
     assert out.hotkey_reset == DEFAULT_HOTKEYS["reset"]
 
 
-def test_preserves_regions_and_colors_the_form_does_not_edit():
-    cfg = AgentConfig(blue_colors=[(9, 9, 9)], team1_region=(1, 2, 3, 4))
+def test_preserves_settings_the_form_does_not_edit():
+    cfg = AgentConfig(monitor_index=2, timeout_sec=45)
     out = _build(cfg)
-    assert out.blue_colors == [(9, 9, 9)]
-    assert out.team1_region == (1, 2, 3, 4)
+    assert out.monitor_index == 2
+    assert out.timeout_sec == 45
 
 
 def test_the_panel_never_touches_the_legacy_gamertag():
     """Identity lives on the account now; an existing agent.toml value survives."""
     out = _build(AgentConfig(self_gamertag="RYRY"))
     assert out.self_gamertag == "RYRY"
-
-
-def test_summary_region_round_trips_through_the_form():
-    out = _build(AgentConfig(), summary_region="1300, 180, 1600, 800")
-    assert out.summary_region == (1300, 180, 1600, 800)
-    assert format_region(out.summary_region) == "1300, 180, 1600, 800"
-
-
-def test_blank_summary_region_clears_the_override():
-    """Blank means "fit it to my screen" - that's None, not a zero box."""
-    out = _build(AgentConfig(summary_region=(1, 2, 3, 4)), summary_region="  ")
-    assert out.summary_region is None
-
-
-def test_unparseable_region_is_treated_as_auto():
-    assert parse_region("left a bit") is None
-    assert parse_region("1,2,3") is None
-    assert parse_region("") is None
-    assert format_region(None) == ""
 
 
 def test_device_key_round_trips_and_is_trimmed():

@@ -79,14 +79,13 @@ def build_config(
     hotkey_summary: str,
     hotkey_scoreboard: str,
     hotkey_reset: str,
-    summary_region: str = "",
     bearer_token: str = "",
 ) -> AgentConfig:
     """Merge form values over ``base``, preserving what the panel doesn't edit.
 
     Pure + unit-tested. Blank hotkeys fall back to the defaults so capture always
-    has bindings; a blank summary region means "fit it to my screen". There is
-    deliberately no gamertag field - identity lives on the account now.
+    has bindings. There is deliberately no gamertag field because identity lives
+    on the account, and no crop field because cropping is server-owned.
     """
     data = to_dict(base)
     data["api_url"] = api_url.strip()
@@ -95,27 +94,7 @@ def build_config(
     data["hotkey_summary"] = hotkey_summary.strip() or DEFAULT_HOTKEYS["summary"]
     data["hotkey_scoreboard"] = hotkey_scoreboard.strip() or DEFAULT_HOTKEYS["scoreboard"]
     data["hotkey_reset"] = hotkey_reset.strip() or DEFAULT_HOTKEYS["reset"]
-    region = parse_region(summary_region)
-    if region is None:
-        data.pop("summary_region", None)
-    else:
-        data["summary_region"] = list(region)
     return from_dict(data)
-
-
-def parse_region(text: str) -> tuple[int, int, int, int] | None:
-    """``"0, 0, 2560, 1440"`` -> a box; blank or unparseable -> ``None`` (derive)."""
-    parts = [p for p in text.replace(",", " ").split() if p]
-    if len(parts) != 4:
-        return None
-    try:
-        return tuple(int(float(p)) for p in parts)  # type: ignore[return-value]
-    except ValueError:
-        return None
-
-
-def format_region(region: tuple[int, int, int, int] | None) -> str:
-    return ", ".join(str(v) for v in region) if region else ""
 
 
 def host_of(url: str) -> str:
@@ -520,7 +499,6 @@ class CapturePanel:
             hotkey_summary=self.cfg.hotkey_summary,
             hotkey_scoreboard=self.cfg.hotkey_scoreboard,
             hotkey_reset=self.cfg.hotkey_reset,
-            summary_region=self.surface.entry("summary_region").get(),
         )
 
     def _save(self, *, rebind: bool = False) -> None:
@@ -591,19 +569,15 @@ class CapturePanel:
 
             try:
                 cfg = self._collect()
-                frame = capture.grab_screen(cfg.monitor_index)
-                capture.capture_summary(cfg, frame=frame)
-                t1, t2 = capture.capture_leaderboards(cfg, frame=frame)
-                found = [n for n, v in (("team1", t1), ("team2", t2)) if v]
-                if found:
-                    message = "Test capture ready - leaderboards: " + ", ".join(found)
-                    colour = theme.WIN
-                else:
-                    message = (
-                        "Test capture got a frame, but no leaderboards were found. "
-                        "Show the game's scoreboard and try again."
-                    )
-                    colour = theme.DRAW
+                captured = capture.capture_full_frame(cfg, require_game_report=True)
+                message = f"Test capture ready - Teams screen {captured.width} x {captured.height}."
+                colour = theme.WIN
+            except capture.NotGameReportError:
+                message = (
+                    "Test capture was refused. Show the Game Report Teams screen on "
+                    "the selected display and try again."
+                )
+                colour = theme.DRAW
             except Exception as exc:  # noqa: BLE001
                 message = (
                     f"Test capture could not start: {exc}. Make sure the game is "
@@ -706,17 +680,17 @@ class CapturePanel:
             api_host=host_of(self.cfg.api_url),
             app_version=__version__,
             monitor=self.state.monitor_value or "Primary display",
-            regions={"summary_region": format_region(self.cfg.summary_region) or "auto"},
         )
 
     def _record_attempt(self, outcome: str, detail: str, match_id: str | None,
-                        images: dict) -> None:
-        """Controller hook: keep the images this capture actually sent."""
+                        frames: dict[str, str]) -> None:
+        """Controller hook: keep metadata, never the uploaded frame pixels."""
         attempt = self._attempt_context()
         attempt.outcome = outcome
         attempt.detail = detail
         attempt.match_id = match_id
-        capturelog.record_attempt(attempt, images, directory=self.debug_dir)
+        attempt.frames = frames
+        capturelog.record_attempt(attempt, directory=self.debug_dir)
         self._on_ui(self._refresh_debug_count)
 
     def _refresh_debug_count(self) -> None:
@@ -759,15 +733,22 @@ class CapturePanel:
             self._on_ui(apply)
 
         def worker() -> None:
-            report = selftest.run_self_test(self.cfg, on_stage=on_stage)
+            report = selftest.run_self_test(
+                self.cfg,
+                summary_frame=self.controller.buffer.summary_frame,
+                on_stage=on_stage,
+            )
+            if report.match_id is not None:
+                self.controller.buffer.clear()
             attempt = self._attempt_context()
             attempt.outcome = "selftest_pass" if report.passed else "selftest_fail"
             attempt.detail = report.summary()
             attempt.match_id = report.match_id
             attempt.frame_size = report.frame_size
+            attempt.frames = report.frames
             attempt.regions.update(report.regions)
             attempt.stages = report.as_stage_rows()
-            capturelog.record_attempt(attempt, report.images, directory=self.debug_dir)
+            capturelog.record_attempt(attempt, directory=self.debug_dir)
 
             def apply() -> None:
                 self.state.self_test_running = False
@@ -875,10 +856,7 @@ class CapturePanel:
         self._repaint()
 
     def _fill_entries(self) -> None:
-        for key, value, secret in (
-            ("bearer_token", self.cfg.bearer_token, True),
-            ("summary_region", format_region(self.cfg.summary_region), False),
-        ):
+        for key, value, secret in (("bearer_token", self.cfg.bearer_token, True),):
             entry = self.surface.entry(key, secret=secret)
             entry.delete(0, "end")
             entry.insert(0, value)
@@ -1009,7 +987,7 @@ class CapturePanel:
         self.surface.canvas.pack(fill="both", expand=True)
         self.toaster = Toaster(root, fonts)
 
-        for key, secret in (("bearer_token", True), ("summary_region", False)):
+        for key, secret in (("bearer_token", True),):
             entry = self.surface.entry(key, secret=secret)
             entry.bind("<FocusOut>", lambda _e: self._save())
             entry.bind("<Return>", lambda _e: self._save())

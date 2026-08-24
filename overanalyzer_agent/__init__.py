@@ -1,13 +1,11 @@
 """OverAnalyzer desktop capture agent.
 
-A small CLI that captures the three Overwatch Game Report regions on a global
-hotkey and uploads them to a running OverAnalyzer API. Reuses the proven capture
-logic from ``calibrated capture geometry`` (fixed summary crop + blue/red leaderboard
-anchor detection).
+A small companion that captures two full Overwatch Game Report frames only on an
+explicit hotkey and uploads them to OverAnalyzer. The service owns crop geometry and
+discards each full frame after processing.
 
 Submodules are import-light: the screen/hotkey libraries (``mss``, ``keyboard``)
-are imported lazily so the upload/capture-geometry logic stays unit-testable on a
-machine without a display.
+are imported lazily so capture and upload stay unit-testable without a display.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

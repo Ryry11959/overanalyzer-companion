@@ -1,9 +1,9 @@
 """CLI capture loop (and launcher for the tray app / settings window).
 
-Workflow (mirrors the original ScreenShot.py F11/F12 flow):
-  * On the *summary* screen, press the summary hotkey  -> grabs the summary region.
-  * On the *scoreboard* screen (Tab), press the scoreboard hotkey -> grabs both
-    leaderboards and, if a summary is buffered, uploads the match and clears the buffer.
+Workflow:
+  * On the Summary screen, press its hotkey to hold the full frame in memory.
+  * On the Teams screen, press its hotkey to check and upload both full frames.
+    The service crops them and discards the full frames after processing.
   * The reset hotkey clears a half-captured buffer.
 
 The capture/upload logic lives in :mod:`overanalyzer_agent.controller`; this
@@ -76,7 +76,8 @@ def run(cfg: AgentConfig) -> None:
     keyboard.add_hotkey(cfg.hotkey_scoreboard, controller.capture_scoreboard)
     keyboard.add_hotkey(cfg.hotkey_reset, controller.reset)
 
-    _log("OverAnalyzer capture agent running.")
+    _log("OverAnalyzer capture agent running. Capture is hotkey-only, never continuous.")
+    _log("Full game frames are uploaded for processing, cropped by the service, then discarded.")
     if not cfg.bearer_token:
         _log(
             "No device key is saved. Open the desktop app Settings, sign in to the "

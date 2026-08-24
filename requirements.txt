@@ -2,8 +2,7 @@
 # dependency versions so the reviewed source and GitHub workflow share a toolchain.
 requests==2.34.2
 mss==10.2.0          # fast screen grab
-Pillow==12.3.0       # image crop / PNG encode
-numpy==2.5.1         # vectorized leaderboard anchor scan
+Pillow==12.3.0       # coarse frame check / PNG encode
 keyboard==0.13.5     # global hotkeys (Windows: may require running as administrator)
 pystray==0.19.5      # system-tray icon + menu + balloon toasts (tray app)
 tomli-w==1.2.0       # write agent.toml from the app (tomllib is read-only)

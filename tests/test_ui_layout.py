@@ -232,7 +232,7 @@ def test_settings_has_no_gamertag_field():
     """Identity moved to the account - the app must not ask for it again."""
     result = build(screen="settings", adv_open=True)
     keys = {op.key for op in result.ops if isinstance(op, L.Entry)}
-    assert keys == {"bearer_token", "summary_region"}
+    assert keys == {"bearer_token"}
     assert not any("gamertag" in t.lower() for t in texts(result))
 
 
@@ -252,7 +252,7 @@ def test_self_test_button_cannot_run_into_the_subtitle_beside_it():
     button = next(c for c in result.controls if c.action == "self_test")
     subtitle = next(
         op for op in result.ops
-        if isinstance(op, L.Text) and op.text.startswith("Sends one test capture")
+        if isinstance(op, L.Text) and op.text.startswith("Uses a held Summary frame")
     )
     assert subtitle.x + measure(subtitle.text, subtitle.font) <= button.x
 
@@ -261,7 +261,7 @@ def test_device_key_field_is_masked():
     entries = {op.key: op for op in build(screen="settings", adv_open=True).ops
                if isinstance(op, L.Entry)}
     assert entries["bearer_token"].secret is True
-    assert entries["summary_region"].secret is False
+    assert set(entries) == {"bearer_token"}
 
 
 def test_pairing_link_only_appears_with_a_web_url():
@@ -389,7 +389,15 @@ def test_the_debug_row_counts_attempts_and_promises_no_key():
     assert any("1 recent attempt," in t for t in one)
     many = texts(build(screen="settings", adv_open=True, debug_count=4))
     assert any("4 recent attempts," in t for t in many)
-    assert any("No device key is stored here." in t for t in many)
+    assert any("No device key, screenshot, or full frame" in t for t in many)
+
+
+def test_settings_disclose_transient_hotkey_only_full_frame_capture():
+    copy = " ".join(texts(build(screen="settings")))
+    assert "only when you press a hotkey or button" in copy
+    assert "whole game frame" in copy
+    assert "uploaded for processing, then discarded" in copy
+    assert "never continuous" in copy
 
 
 # --- update banner ----------------------------------------------------------

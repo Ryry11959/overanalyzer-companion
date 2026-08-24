@@ -661,7 +661,7 @@ def build_settings(state: PanelState, measure: Measure) -> Layout:
     # Trim the subtitle to whatever the button leaves, so the two can never
     # collide whatever the font resolves to.
     subtitle = _ellipsise(
-        "Sends one test capture end to end",
+        "Uses a held Summary frame and visible Teams screen",
         inner - (measure(button, SANS_SM) + 24) - 12, SANS_SM, measure,
     )
     ops.append(Text(PAD, y + 18, subtitle, SANS_SM, theme.TEXT_MUTED))
@@ -734,7 +734,13 @@ def build_settings(state: PanelState, measure: Measure) -> Layout:
         controls.append(Control(action, PAD + 1, ry, inner - 2, row_h, "Click, then press a key"))
     y += row_h * len(rows) + len(rows) + 1 + 8
     ops.append(Text(PAD, y, "Click a row, then press the key you want.", META, theme.TEXT_MUTED))
-    y += 16 + 20
+    y += 16 + 10
+    disclosure = (
+        "Capture runs only when you press a hotkey or button. Each whole game frame "
+        "is uploaded for processing, then discarded. Capture is never continuous."
+    )
+    ops.append(Text(PAD, y, disclosure, META, theme.TEXT_MUTED, wrap=inner))
+    y += _wrapped_height(disclosure, inner, META, measure) + 20
     y = _separator(ops, y) + 20
 
     # --- advanced
@@ -742,7 +748,7 @@ def build_settings(state: PanelState, measure: Measure) -> Layout:
     colour = theme.TEXT if hovered else theme.TEXT
     ops.append(Text(PAD, y + 8, "Advanced", SANS, colour, "w"))
     ops.append(
-        Text(PAD + measure("Advanced", SANS) + 8, y + 8, "capture regions, test capture",
+        Text(PAD + measure("Advanced", SANS) + 8, y + 8, "display, test capture",
              SANS_SM, theme.TEXT_MUTED, "w")
     )
     ops.append(
@@ -766,21 +772,11 @@ def build_settings(state: PanelState, measure: Measure) -> Layout:
             )
             y += 16 + 14
 
-        ops.append(Text(PAD, y, "SUMMARY REGION", MICRO, theme.TEXT_MUTED))
-        y += 16
-        ops.append(Entry(PAD, y, inner, 32, "summary_region"))
-        y += 32 + 6
-        ops.append(
-            Text(PAD, y, "Blank = fitted to your screen. Only pin it if a test "
-                         "capture comes out misaligned.", META, theme.TEXT_MUTED,
-                 wrap=inner)
-        )
-        y += 38
         _small_button(ops, controls, state, "test_capture", "Test capture", y, measure,
                       left=True)
         y += 32 + 20
 
-        # --- capture debug: the images that were actually sent
+        # --- capture debug: metadata only, never uploaded frame pixels
         ops.append(Text(PAD, y, "CAPTURE DEBUG", MICRO, theme.TEXT_MUTED))
         y += 16
         ops.append(
@@ -820,13 +816,13 @@ def _debug_text(state: PanelState) -> str:
     """What the debug folder holds right now, in the user's terms."""
     if not state.debug_count:
         return (
-            "Empty. Each capture saves the images it sent here, so a bad read "
-            "can be looked at or sent in."
+            "Empty. Capture attempts save a readable metadata report here. Full "
+            "frame pixels are never written to this folder."
         )
     kept = "attempt" if state.debug_count == 1 else "attempts"
     return (
-        f"{state.debug_count} recent {kept}, each with the images that were sent "
-        "and a readable report. No device key is stored here."
+        f"{state.debug_count} recent {kept}, each with a metadata report. No device "
+        "key, screenshot, or full frame is stored here."
     )
 
 

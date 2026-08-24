@@ -1,3 +1,8 @@
 # Reproducible PyInstaller outputs; the signed release is published by the owner.
 build/
 dist/
+
+# Local Python test and tooling caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/

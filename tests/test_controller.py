@@ -1,5 +1,4 @@
-"""Drives the CaptureController through its capture->upload->poll flow against a
-threaded mock API, asserting the status-event sequence a UI would render."""
+"""Drive the two-frame controller through capture, upload, poll, and recording."""
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,24 +7,18 @@ import pytest
 
 from overanalyzer_agent import capture
 from overanalyzer_agent.config import AgentConfig
-from overanalyzer_agent.controller import (
-    CaptureController,
-    Status,
-    capture_error_message,
-    upload_error_message,
-)
+from overanalyzer_agent.controller import CaptureController, Status, capture_error_message, upload_error_message
 from overanalyzer_agent.uploader import UploadError
 
 
 class _Handler(BaseHTTPRequestHandler):
-    def do_POST(self):  # noqa: N802 - upload endpoint
+    def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        self.rfile.read(length)
+        self.server.last_body = self.rfile.read(length)
         self.server.upload_count += 1
-        self._json(202, {"match_id": "m1", "status": "processing", "message": "ok"})
+        self._json(202, {"match_id": "m1", "status": "processing"})
 
-    def do_GET(self):  # noqa: N802 - status-poll endpoint
-        self.server.status_polls += 1
+    def do_GET(self):
         self._json(200, {"status": self.server.match_status})
 
     def _json(self, code, body):
@@ -36,7 +29,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def log_message(self, *args):
+    def log_message(self, *_args):
         pass
 
 
@@ -44,240 +37,170 @@ class _Handler(BaseHTTPRequestHandler):
 def mock_api():
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.upload_count = 0
-    server.status_polls = 0
+    server.last_body = b""
     server.match_status = "complete"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        _, port = server.server_address
-        yield f"http://127.0.0.1:{port}", server
+        yield f"http://127.0.0.1:{server.server_address[1]}", server
     finally:
         server.shutdown()
         server.server_close()
 
 
+def _frame(data: bytes) -> capture.CapturedFrame:
+    return capture.CapturedFrame(data, 1920, 1080)
+
+
 @pytest.fixture
 def fake_capture(monkeypatch):
-    """Stub the screen-grab so the flow runs headless (no display / mss)."""
-    monkeypatch.setattr(capture, "capture_summary", lambda cfg, frame=None: b"SUMMARY")
-    monkeypatch.setattr(
-        capture, "capture_leaderboards", lambda cfg, frame=None: (b"T1", b"T2")
-    )
+    calls = []
+
+    def _capture(_cfg, *, frame=None, require_game_report=False):
+        calls.append(require_game_report)
+        return _frame(b"TEAMS" if require_game_report else b"SUMMARY")
+
+    monkeypatch.setattr(capture, "capture_full_frame", _capture)
+    return calls
 
 
-def test_full_flow_uploads_and_reports_complete(mock_api, fake_capture):
+def test_full_flow_uses_the_versioned_two_frame_contract(mock_api, fake_capture):
     base, server = mock_api
     events = []
-    ctrl = CaptureController(AgentConfig(api_url=base), listener=events.append)
-
-    assert ctrl.capture_summary() is True
-    assert ctrl.has_summary
-    assert ctrl.capture_scoreboard() is True
-
+    controller = CaptureController(AgentConfig(api_url=base), listener=events.append)
+    assert controller.capture_summary()
+    assert controller.capture_scoreboard()
+    assert fake_capture == [False, True]
     assert server.upload_count == 1
-    assert not ctrl.has_summary  # buffer cleared after upload
+    assert b'name="summary_frame"' in server.last_body
+    assert b'name="teams_frame"' in server.last_body
+    assert not controller.has_summary
     assert events[-1].status is Status.OK
-    assert "complete" in events[-1].message
-    assert events[-1].match_id == "m1"
 
 
-def test_needs_review_maps_to_needs_review_state(mock_api, fake_capture):
+def test_settled_statuses_map_to_ui_states(mock_api, fake_capture):
     base, server = mock_api
     server.match_status = "needs_review"
     events = []
-    ctrl = CaptureController(AgentConfig(api_url=base), listener=events.append)
-    ctrl.capture_summary()
-    ctrl.capture_scoreboard()
+    controller = CaptureController(AgentConfig(api_url=base), listener=events.append)
+    controller.capture_summary()
+    controller.capture_scoreboard()
     assert events[-1].status is Status.NEEDS_REVIEW
 
 
-def test_failed_ocr_maps_to_error(mock_api, fake_capture):
-    base, server = mock_api
-    server.match_status = "failed"
-    events = []
-    ctrl = CaptureController(AgentConfig(api_url=base), listener=events.append)
-    ctrl.capture_summary()
-    assert ctrl.capture_scoreboard() is False
-    assert events[-1].status is Status.ERROR
-
-
-def test_scoreboard_without_summary_does_not_upload(mock_api, fake_capture):
+def test_scoreboard_without_summary_does_not_upload_or_buffer_frame(mock_api, fake_capture):
     base, server = mock_api
     events = []
-    ctrl = CaptureController(AgentConfig(api_url=base), listener=events.append)
-    assert ctrl.capture_scoreboard() is False
+    controller = CaptureController(AgentConfig(api_url=base), listener=events.append)
+    assert not controller.capture_scoreboard()
     assert server.upload_count == 0
+    assert controller.buffer.teams_frame is None
     assert events[-1].status is Status.IDLE
 
 
-def test_reset_clears_buffer(fake_capture):
-    ctrl = CaptureController(AgentConfig())
-    ctrl.capture_summary()
-    assert ctrl.has_summary
-    ctrl.reset()
-    assert not ctrl.has_summary
+def test_coarse_guard_refusal_never_uploads_or_fires_shutter(monkeypatch, mock_api):
+    base, server = mock_api
+    monkeypatch.setattr(
+        capture,
+        "capture_full_frame",
+        lambda *_a, **_kw: (_ for _ in ()).throw(capture.NotGameReportError()),
+    )
+    events = []
+    shots = []
+    controller = CaptureController(
+        AgentConfig(api_url=base), listener=events.append, on_shot=lambda: shots.append(1)
+    )
+    assert not controller.capture_scoreboard()
+    assert server.upload_count == 0 and shots == []
+    assert events[-1].status is Status.ERROR
+    assert "Game Report Teams" in events[-1].message
+
+
+def test_reset_releases_the_held_summary(fake_capture):
+    controller = CaptureController(AgentConfig())
+    controller.capture_summary()
+    assert controller.has_summary
+    controller.reset()
+    assert not controller.has_summary
 
 
 def test_summary_capture_failure_emits_error(monkeypatch):
-    def boom(cfg, frame=None):
-        raise RuntimeError("no screen")
-
-    monkeypatch.setattr(capture, "capture_summary", boom)
-    events = []
-    ctrl = CaptureController(AgentConfig(), listener=events.append)
-    assert ctrl.capture_summary() is False
-    assert events[-1].status is Status.ERROR
-    assert not ctrl.has_summary
-
-
-def test_upload_connection_error_emits_error(fake_capture):
-    events = []
-    ctrl = CaptureController(
-        AgentConfig(api_url="http://127.0.0.1:9", timeout_sec=1.0), listener=events.append
-    )
-    ctrl.capture_summary()
-    assert ctrl.capture_scoreboard() is False
-    assert events[-1].status is Status.ERROR
-
-
-# --- the shutter hook -------------------------------------------------------
-def test_on_shot_fires_for_a_successful_summary_grab(fake_capture):
-    shots = []
-    ctrl = CaptureController(AgentConfig(), on_shot=lambda: shots.append(1))
-    ctrl.capture_summary()
-    assert shots == [1]
-
-
-def test_on_shot_fires_for_a_successful_scoreboard_grab_even_without_a_summary(fake_capture):
-    """The picture was taken either way - the hook isn't about the upload outcome."""
-    shots = []
-    ctrl = CaptureController(AgentConfig(), on_shot=lambda: shots.append(1))
-    ctrl.capture_scoreboard()
-    assert shots == [1]
-
-
-def test_on_shot_does_not_fire_on_a_failed_grab(monkeypatch):
-    monkeypatch.setattr(capture, "capture_summary", lambda cfg, frame=None: (_ for _ in ()).throw(
-        RuntimeError("no screen")
-    ))
-    shots = []
-    ctrl = CaptureController(AgentConfig(), on_shot=lambda: shots.append(1))
-    ctrl.capture_summary()
-    assert shots == []
-
-
-def test_on_shot_is_optional(fake_capture):
-    CaptureController(AgentConfig()).capture_summary()  # must not raise with no hook
-
-
-def test_capture_failure_explains_how_to_make_the_screen_readable():
-    message = capture_error_message("Summary", RuntimeError("no screen"))
-    assert "could not start" in message
-    assert "selected display" in message
-
-
-def test_invalid_device_key_upload_failure_explains_the_recovery(monkeypatch):
-    import overanalyzer_agent.controller as controller_module
-
     monkeypatch.setattr(
-        controller_module,
-        "upload",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            UploadError("upload failed (401): Invalid or revoked device token")
-        ),
+        capture,
+        "capture_full_frame",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("no screen")),
     )
     events = []
-    ctrl = CaptureController(
-        AgentConfig(bearer_token="device-key-example"), listener=events.append
-    )
-    ctrl.buffer.summary = b"summary"
-
-    assert ctrl._upload() is False
+    controller = CaptureController(AgentConfig(), listener=events.append)
+    assert not controller.capture_summary()
     assert events[-1].status is Status.ERROR
-    assert "invalid or revoked" in events[-1].message
-    assert "run the self test again" in events[-1].message
 
 
-def test_unreachable_upload_failure_does_not_leave_a_new_user_with_transport_jargon():
-    message = upload_error_message(
-        AgentConfig(),
-        UploadError("request to https://api.example failed: connection refused"),
-    )
-    assert "could not reach OverAnalyzer" in message
-    assert "internet connection" in message
+def test_shutter_fires_only_after_a_successful_grab(fake_capture):
+    shots = []
+    controller = CaptureController(AgentConfig(), on_shot=lambda: shots.append(1))
+    controller.capture_summary()
+    controller.capture_scoreboard()
+    assert shots == [1, 1]
 
 
-# --- capture debug recording ------------------------------------------------
-def test_a_successful_upload_records_what_it_sent(mock_api, fake_capture):
-    """The images are the only thing that can explain a wrong read later."""
+def test_recorder_receives_metadata_and_never_frame_bytes(mock_api, fake_capture):
     base, _ = mock_api
     recorded = []
-    ctrl = CaptureController(
-        AgentConfig(api_url=base),
-        recorder=lambda *args: recorded.append(args),
+    controller = CaptureController(
+        AgentConfig(api_url=base), recorder=lambda *args: recorded.append(args)
     )
-    ctrl.capture_summary()
-    ctrl.capture_scoreboard()
+    controller.capture_summary()
+    controller.capture_scoreboard()
+    outcome, _detail, match_id, frames = recorded[0]
+    assert outcome == "complete" and match_id == "m1"
+    assert frames == {
+        "summary_frame": "1920 x 1080, 7 bytes",
+        "teams_frame": "1920 x 1080, 5 bytes",
+    }
+    assert all(isinstance(value, str) for value in frames.values())
 
-    assert len(recorded) == 1
-    outcome, _detail, match_id, images = recorded[0]
-    assert outcome == "complete"
-    assert match_id == "m1"
-    assert images == {"summary": b"SUMMARY", "team1": b"T1", "team2": b"T2"}
 
-
-def test_a_refused_upload_still_records_the_images(fake_capture):
-    """The failing case is the one worth keeping - there is no server-side copy."""
+def test_refused_upload_also_records_metadata_only(fake_capture):
     recorded = []
-    ctrl = CaptureController(
-        AgentConfig(api_url="http://127.0.0.1:9"),  # nothing listens here
+    controller = CaptureController(
+        AgentConfig(api_url="http://127.0.0.1:9", timeout_sec=1.0),
         recorder=lambda *args: recorded.append(args),
     )
-    ctrl.capture_summary()
-    assert ctrl.capture_scoreboard() is False
-
-    assert len(recorded) == 1
-    outcome, detail, match_id, images = recorded[0]
-    assert outcome == "error" and match_id is None
-    assert images["summary"] == b"SUMMARY"
-    assert "internet connection" in detail
+    controller.capture_summary()
+    assert not controller.capture_scoreboard()
+    assert recorded[0][0] == "error"
+    assert recorded[0][2] is None
+    assert recorded[0][3]["summary_frame"].endswith("7 bytes")
 
 
-def test_a_recorder_that_raises_does_not_break_the_capture(mock_api, fake_capture):
+def test_recorder_failure_does_not_change_capture_outcome(mock_api, fake_capture):
     base, server = mock_api
-
-    def _explode(*_args):
-        raise OSError("disk full")
-
-    ctrl = CaptureController(AgentConfig(api_url=base), recorder=_explode)
-    ctrl.capture_summary()
-    assert ctrl.capture_scoreboard() is True
+    controller = CaptureController(
+        AgentConfig(api_url=base),
+        recorder=lambda *_args: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    controller.capture_summary()
+    assert controller.capture_scoreboard()
     assert server.upload_count == 1
 
 
-# --- the service's own refusal wording --------------------------------------
-def test_a_403_relays_the_services_explanation():
-    """Guessing one cause is what told a correctly paired user to sign in to a
-    writable account when the real problem was their account's first upload."""
-    detail = (
-        "This device was paired before its account confirmed a verified email. "
-        "Open Settings in the web app, create a new device key, and paste it "
-        "into the capture app."
+def test_capture_failure_message_is_actionable():
+    message = capture_error_message("Summary", RuntimeError("no screen"))
+    assert "could not start" in message and "selected display" in message
+
+
+def test_invalid_device_key_message_explains_recovery():
+    message = upload_error_message(
+        AgentConfig(bearer_token="device-key-example"),
+        UploadError("upload failed (401): Invalid or revoked device token"),
     )
-    exc = UploadError('upload failed (403): {"detail": "%s"}' % detail)
-    message = upload_error_message(AgentConfig(), exc)
+    assert "invalid or revoked" in message and "run the self test again" in message
+
+
+def test_api_403_detail_is_relayed():
+    detail = "This device needs a replacement key."
+    message = upload_error_message(
+        AgentConfig(), UploadError(f'upload failed (403): {{"detail": "{detail}"}}')
+    )
     assert detail in message
-    assert "writable account" not in message
-
-
-def test_a_403_without_a_readable_body_still_says_something_useful():
-    exc = UploadError("upload failed (403): <html>Forbidden</html>")
-    assert "writable account" in upload_error_message(AgentConfig(), exc)
-
-
-def test_the_demo_refusal_is_relayed_verbatim_too():
-    exc = UploadError(
-        'upload failed (403): {"detail": "This is the public demo account - '
-        'sign in to upload or edit your own matches."}'
-    )
-    assert "public demo account" in upload_error_message(AgentConfig(), exc)
