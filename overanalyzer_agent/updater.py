@@ -22,6 +22,10 @@ the point of the module.** They are, in order:
 5. **Nothing installs itself.** Every path here begins with the user clicking
    Update, including a release the service marks mandatory - "mandatory" changes
    how insistently the app asks, and nothing else.
+6. **The service does not get to choose where the download lands.** The
+   announced version becomes part of a filename in the temp folder, so it must
+   be a plain version number (:data:`VERSION_RE`), and the staging path is
+   resolved and checked against the temp root before anything is written.
 
 The swap itself reuses the pattern ``removal.py`` established: a running EXE on
 Windows cannot replace itself, so a detached PowerShell helper waits for this
@@ -34,6 +38,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -54,6 +59,16 @@ ALLOWED_HOSTS = frozenset({
 
 MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024  # a one-file build is ~32 MiB
 CHUNK_BYTES = 64 * 1024
+
+# The announced version is interpolated into the staging filename, so it must
+# be exactly what parse_version() expects and nothing more: an optional "v", a
+# three-part numeric version, and an optional pre-release. No separators, drive
+# letters, control characters, or build metadata can pass, so the string cannot
+# turn "OverAnalyzer-{version}.exe" into a path somewhere else.
+VERSION_RE = re.compile(
+    r"[vV]?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+MAX_VERSION_LENGTH = 64
 
 
 class UpdateError(RuntimeError):
@@ -84,6 +99,19 @@ def parse_version(value: str) -> tuple[int, ...]:
 
 def is_newer(candidate: str, current: str) -> bool:
     return parse_version(candidate) > parse_version(current)
+
+
+def check_version_allowed(version: str) -> None:
+    """Refuse an announced version that is anything but a plain version number.
+
+    The version is part of a filename under the temp folder, so a crafted one
+    could otherwise name a path outside it.
+    """
+    if len(version) > MAX_VERSION_LENGTH or VERSION_RE.fullmatch(version) is None:
+        raise UpdateError(
+            "The announced update version is not a plain version number, so the "
+            "update was refused."
+        )
 
 
 def check_url_allowed(url: str) -> None:
@@ -140,6 +168,7 @@ def check_for_update(
     if not is_newer(version, current_version):
         return None
     try:
+        check_version_allowed(version)
         check_url_allowed(download)
     except UpdateError:
         # An announcement pointing somewhere unexpected is not offered at all.
@@ -228,8 +257,19 @@ def _content_length(response: Any) -> int:
 
 
 def staging_path(version: str) -> Path:
-    """Where a downloaded build waits, outside the running app's directory."""
-    return Path(tempfile.gettempdir()) / f"OverAnalyzer-{version}.exe"
+    """Where a downloaded build waits, outside the running app's directory.
+
+    The version is the service's, so it is checked before it becomes a
+    filename, and the resolved result must sit directly under the temp root.
+    """
+    check_version_allowed(version)
+    root = Path(tempfile.gettempdir()).resolve()
+    path = (root / f"OverAnalyzer-{version}.exe").resolve()
+    if path.parent != root:
+        raise UpdateError(
+            "The update would be saved outside the temp folder, so it was refused."
+        )
+    return path
 
 
 def current_executable(frozen: bool | None = None) -> Path | None:
