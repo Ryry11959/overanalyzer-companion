@@ -234,6 +234,114 @@ def test_a_failed_download_never_starts_the_helper(tmp_path: Path, monkeypatch):
     assert commands == []
 
 
+# --- where the download is staged -------------------------------------------
+# Each of these is a version the service could announce which, interpolated into
+# the staging filename, would name a path the service must not get to choose.
+# The "9.9.9" ones also look newer than any real build, so they reach the check
+# that refuses them rather than failing the version comparison first.
+CRAFTED_VERSIONS = {
+    "backslash-traversal": "..\\..\\evil",
+    "slash-traversal": "../evil",
+    "absolute-windows-path": "C:\\Windows\\Temp\\evil",
+    "drive-letter-path": "D:evil",
+    "nul-byte": "9.9.9\x00evil",
+    "slash": "9.9.9/evil",
+    "over-long": "9.9.9-" + "a" * 300,
+    "newer-looking-traversal": "9.9.9/../../evil",
+}
+
+
+@pytest.fixture
+def staging_root(tmp_path: Path, monkeypatch) -> Path:
+    """An isolated temp root, so a refused version can be shown to write nothing."""
+    root = tmp_path / "temp"
+    root.mkdir()
+    monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(root))
+    return root
+
+
+def _files_under(path: Path) -> list[Path]:
+    return sorted(p for p in path.rglob("*") if p.is_file())
+
+
+@pytest.mark.parametrize("version", list(CRAFTED_VERSIONS.values()), ids=list(CRAFTED_VERSIONS))
+def test_a_crafted_version_is_refused_before_anything_is_written(
+    tmp_path: Path, staging_root: Path, version: str
+):
+    """The version is the service's, and it used to become a path unchecked: a
+    crafted one could delete or replace a user-writable file outside the temp
+    folder once the user approved the update."""
+    exe = tmp_path / "app" / "OverAnalyzer.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"the old build")
+    requests_made: list = []
+    commands: list = []
+
+    with pytest.raises(updater.UpdateError, match="refused"):
+        updater.install_release(
+            _release(version=version), executable=exe,
+            request_get=lambda *a, **kw: requests_made.append(a) or FakeResponse(PAYLOAD),
+            helper_runner=commands.append,
+            process_id=4321,
+        )
+    assert requests_made == [], "nothing is downloaded for a refused version"
+    assert commands == [], "the helper is never started for a refused version"
+    assert _files_under(tmp_path) == [exe], "nothing is written anywhere"
+    assert exe.read_bytes() == b"the old build"
+
+
+@pytest.mark.parametrize("version", list(CRAFTED_VERSIONS.values()), ids=list(CRAFTED_VERSIONS))
+def test_an_announcement_with_a_crafted_version_is_not_offered(version: str):
+    assert updater.check_for_update(
+        AgentConfig(), current_version="0.1.0",
+        request_get=lambda *_a, **_kw: FakeResponse(json_body=_announcement(version=version)),
+    ) is None
+
+
+def test_a_newer_looking_crafted_version_is_refused_by_the_pattern_not_the_comparison():
+    version = CRAFTED_VERSIONS["newer-looking-traversal"]
+    assert updater.is_newer(version, "0.1.0"), "the comparison alone would let this through"
+    with pytest.raises(updater.UpdateError, match="plain version number"):
+        updater.check_version_allowed(version)
+
+
+@pytest.mark.parametrize("version", ["0.2", "0.2.0+build.1", "0.2.0\n", " 0.2.0"])
+def test_anything_but_a_plain_version_number_is_refused(version: str):
+    with pytest.raises(updater.UpdateError, match="plain version number"):
+        updater.check_version_allowed(version)
+
+
+@pytest.mark.parametrize("version", ["0.2.0", "v0.2.0", "0.2.0-rc.1", "0.10.0-beta-2"])
+def test_a_plain_version_is_staged_directly_under_the_temp_root(staging_root: Path, version: str):
+    path = updater.staging_path(version)
+    assert path.parent == staging_root.resolve()
+    assert path.name == f"OverAnalyzer-{version}.exe"
+
+
+def test_a_pre_release_version_still_installs(tmp_path: Path, staging_root: Path):
+    exe = tmp_path / "app" / "OverAnalyzer.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"the old build")
+    commands: list = []
+
+    updater.install_release(
+        _release(version="0.3.0-rc.1"), executable=exe,
+        request_get=lambda *_a, **_kw: FakeResponse(PAYLOAD),
+        helper_runner=commands.append,
+        process_id=4321,
+    )
+    assert (staging_root / "OverAnalyzer-0.3.0-rc.1.exe").read_bytes() == PAYLOAD
+    assert commands, "a plain pre-release version installs as before"
+
+
+def test_the_staging_path_is_checked_against_the_temp_root_on_its_own(staging_root: Path, monkeypatch):
+    """Belt and braces: even with the pattern out of the way, a resolved path
+    that leaves the temp root is refused."""
+    monkeypatch.setattr(updater, "check_version_allowed", lambda version: None)
+    with pytest.raises(updater.UpdateError, match="outside the temp folder"):
+        updater.staging_path("/../../evil")
+
+
 # --- the swap helper --------------------------------------------------------
 def test_the_helper_waits_for_this_process_before_swapping():
     script = updater.swap_helper_script(Path("C:/app/OverAnalyzer.exe"), Path("C:/tmp/new.exe"), 99)
